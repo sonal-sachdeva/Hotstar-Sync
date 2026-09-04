@@ -1,6 +1,6 @@
 import { JioHotstarAdapter } from "@/src/adapter/JioHotstarAdapter";
 import { ConnectionManager } from "@/src/net/ConnectionManager";
-import { decideCorrection } from "@/src/sync/SyncEngine";
+import { decideCorrection, estimateOffset } from "@/src/sync/SyncEngine";
 import type { Participant, RoomState } from "@hotstar-sync/protocol";
 
 const SERVER = 'ws://localhost:8787';
@@ -18,6 +18,10 @@ export default defineContentScript({
     let participants: Participant[] = [];
     let connected = false;
     const echo = { play: 0, pause: 0, seek: 0 };
+    let clockOffset = 0;        // serverClock - clientClock, in ms
+    let bestRtt = Infinity;     // keep the offset from the fastest round-trip
+    const serverNow = () => Date.now() + clockOffset;
+    const ping = () => conn?.send({ type: 'ping', t0: Date.now() });
 
     // ---- room from the URL hash (#hsync=CODE) ----
     const roomFromHash = () => location.hash.match(/hsync=([a-z0-9]+)/i)?.[1] ?? null;
@@ -30,9 +34,17 @@ export default defineContentScript({
         onMessage: (msg) => {
           if (msg.type === 'state') { roomState = msg.state; onRoomState(); }
           else if (msg.type === 'presence') participants = msg.participants;
+          else if (msg.type === 'pong') {
+            const rtt = Date.now() - msg.t0;
+            if (rtt < bestRtt) { bestRtt = rtt; clockOffset = estimateOffset(msg.t0, msg.serverTime, Date.now()); }
+          }
           render();
         },
-        onStatus: (open) => { connected = open; render(); },
+        onStatus: (open) => {
+          connected = open;
+          if (open) { bestRtt = Infinity; for (let i = 0; i < 4; i++) setTimeout(ping, i * 250); }
+          render();
+        },
       });
       conn.connect();
       conn.send({ type: 'hello', name: 'me' });
@@ -58,7 +70,7 @@ export default defineContentScript({
       if (!st) return;
       if (rs.playing && !st.playing) drive('play', () => adapter.play());
       else if (!rs.playing && st.playing) drive('pause', () => adapter.pause());
-      const c = decideCorrection(rs, st.currentTime, Date.now());
+      const c = decideCorrection(rs, st.currentTime, serverNow());
       if (c.kind === 'seek') drive('seek', () => adapter.seek(c.time));
     }
 
@@ -67,7 +79,7 @@ export default defineContentScript({
       if (!rs || !rs.playing) return;
       const st = adapter.getState();
       if (!st || !st.playing) return;
-      const c = decideCorrection(rs, st.currentTime, Date.now());
+      const c = decideCorrection(rs, st.currentTime, serverNow());
       if (c.kind === 'seek') drive('seek', () => adapter.seek(c.time));
       else if (c.kind === 'nudge') adapter.setRate(c.rate);
       else if (st.rate !== rs.rate) adapter.setRate(rs.rate);
@@ -83,7 +95,7 @@ export default defineContentScript({
         if (type === 'play') roomState.playing = true;
         else if (type === 'pause') roomState.playing = false;
         roomState.positionAtEpoch = st.currentTime;
-        roomState.anchorServerTime = Date.now();
+        roomState.anchorServerTime = serverNow();
       }
     }
     adapter.on('play', () => sendLocal('play'));
@@ -121,7 +133,7 @@ export default defineContentScript({
       head.style.whiteSpace = 'pre';
       head.textContent = roomCode
         ? `Hotstar Sync\n${connected ? '● connected' : '○ connecting…'} · ${participants.length} here\n` +
-          `room ${roomCode}\n` +
+          `room ${roomCode}  clk ${clockOffset >= 0 ? '+' : ''}${clockOffset}ms\n` +
           (roomState ? `${roomState.playing ? '▶' : '⏸'} ${fmt(roomState.positionAtEpoch)}  rev ${roomState.revision}\n` : '') +
           (st ? `me ${st.playing ? '▶' : '⏸'} ${fmt(st.currentTime)}` : 'me no <video>')
         : `Hotstar Sync\nNo party yet`;
@@ -145,10 +157,12 @@ export default defineContentScript({
     const PLAYBACK = ['play', 'pause', 'seeking', 'seeked', 'ratechange'] as const;
     PLAYBACK.forEach((e) => adapter.on(e, render));
     const timer = window.setInterval(() => { driftCheck(); render(); }, 1000);
+    const pingTimer = window.setInterval(ping, 15000);   // keep the clock estimate fresh
     render();
 
     window.addEventListener('pagehide', () => {
       window.clearInterval(timer);
+      window.clearInterval(pingTimer);
       conn?.close();
       adapter.destroy();
     });

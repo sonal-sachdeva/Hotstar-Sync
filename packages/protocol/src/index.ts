@@ -13,11 +13,13 @@ export interface Participant{
 
 export type ServerMessage = 
     | {type : 'state'; state : RoomState}
-    | {type : 'presence'; participants : Participant[]};
+    | {type : 'presence'; participants : Participant[]}
+    | { type: 'pong'; t0: number; serverTime: number };
 
 export type ClientCommand = 
     | {type : 'hello', name : string}
     | {type : 'play', position : number}
     | {type : 'pause', position : number}
     | {type : 'seek', position : number}
+    | { type: 'ping'; t0: number };
 
