@@ -9,6 +9,10 @@ importers:
   .: {}
 
   packages/extension:
+    dependencies:
+      '@hotstar-sync/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       typescript:
         specifier: ^5.9.3

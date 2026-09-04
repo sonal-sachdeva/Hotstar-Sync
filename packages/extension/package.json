@@ -22,5 +22,8 @@
     "vitest": "^4.1.11",
     "web-ext": "^10.5.0",
     "wxt": "^0.21.3"
+  },
+  "dependencies": {
+    "@hotstar-sync/protocol": "workspace:*"
   }
 }

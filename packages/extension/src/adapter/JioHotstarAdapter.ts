@@ -27,11 +27,9 @@ export class JioHotstarAdapter implements VideoAdapter {
         this.detachListeners();
         this.video = el;
         for(const event of PLAYBACK_EVENTS) {
-            const handler = () => {
-                this.emit(event);
-                this.boundHandlers.set(event, handler);
-                el.addEventListener(event, handler);
-            }
+            const handler = () => this.emit(event);
+            this.boundHandlers.set(event, handler);
+            el.addEventListener(event, handler);
         }
     }
 
@@ -69,7 +67,7 @@ export class JioHotstarAdapter implements VideoAdapter {
     }
 
     async play(){
-        await this.video?.play();
+        try { await this.video?.play(); } catch { /* autoplay blocked until a user gesture; ignore */ }
     }
     pause(){
         this.video?.pause();
