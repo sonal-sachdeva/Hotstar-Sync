@@ -3,7 +3,9 @@ import { ConnectionManager } from "@/src/net/ConnectionManager";
 import { decideCorrection, estimateOffset } from "@/src/sync/SyncEngine";
 import type { Participant, RoomState } from "@hotstar-sync/protocol";
 
-const SERVER = 'ws://localhost:8787';
+const SERVER = import.meta.env.DEV
+  ? 'ws://localhost:8787'                                   // pnpm dev
+  : 'wss://hotstar-sync-server.bingeparty.workers.dev';     // pnpm build (production)
 
 export default defineContentScript({
   matches: ['*://*.hotstar.com/*'],
@@ -102,13 +104,16 @@ export default defineContentScript({
     adapter.on('pause', () => sendLocal('pause'));
     adapter.on('seeked', () => sendLocal('seek'));
 
+    let collapsed = false;
+
     // ---- overlay panel (interactive) ----
     const panel = document.createElement('div');
     Object.assign(panel.style, {
       position: 'fixed', bottom: '16px', right: '16px', zIndex: '2147483647',
-      minWidth: '240px', padding: '12px 14px', background: 'rgba(14,18,27,.94)',
-      color: '#e7eef6', font: '500 12px/1.55 ui-monospace, monospace',
-      borderRadius: '12px', boxShadow: '0 4px 16px rgba(0,0,0,.45)', whiteSpace: 'pre',
+      minWidth: '240px', maxWidth: 'calc(100vw - 32px)', padding: '12px 14px',
+      background: 'rgba(14,18,27,.94)', color: '#e7eef6',
+      font: '500 12px/1.55 ui-monospace, monospace',
+      borderRadius: '12px', boxShadow: '0 4px 16px rgba(0,0,0,.45)', boxSizing: 'border-box',
     });
     document.body.appendChild(panel);
 
@@ -118,6 +123,7 @@ export default defineContentScript({
       const b = document.createElement('button');
       b.textContent = label;
       Object.assign(b.style, {
+        display: 'block', boxSizing: 'border-box',
         marginTop: '8px', width: '100%', padding: '7px 10px', cursor: 'pointer',
         background: '#0e7c86', color: '#fff', border: 'none', borderRadius: '8px',
         font: '600 12px ui-monospace, monospace',
@@ -127,22 +133,43 @@ export default defineContentScript({
     }
 
     function render() {
-      const st = adapter.getState();
       panel.textContent = '';
-      const head = document.createElement('div');
-      head.style.whiteSpace = 'pre';
-      head.textContent = roomCode
-        ? `Hotstar Sync\n${connected ? '● connected' : '○ connecting…'} · ${participants.length} here\n` +
+
+      // header: title + minimize/expand toggle (click anywhere on it)
+      const header = document.createElement('div');
+      Object.assign(header.style, {
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        gap: '12px', cursor: 'pointer', userSelect: 'none', fontWeight: '600',
+      });
+      const title = document.createElement('span');
+      title.textContent = collapsed ? `🎬${roomCode ? ' · ' + participants.length : ''}` : 'Hotstar Sync';
+      const toggle = document.createElement('span');
+      toggle.style.opacity = '0.7';
+      toggle.textContent = collapsed ? '▸' : '–';
+      header.append(title, toggle);
+      header.onclick = () => { collapsed = !collapsed; render(); };
+      panel.appendChild(header);
+
+      // collapsed: show only the tiny header pill, nothing else
+      if (collapsed) { panel.style.padding = '8px 12px'; panel.style.minWidth = 'auto'; return; }
+      panel.style.padding = '12px 14px'; panel.style.minWidth = '240px';
+
+      const st = adapter.getState();
+      const body = document.createElement('div');
+      body.style.whiteSpace = 'pre';
+      body.style.margin = '6px 0 2px';
+      body.textContent = roomCode
+        ? `${connected ? '● connected' : '○ connecting…'} · ${participants.length} here\n` +
           `room ${roomCode}  clk ${clockOffset >= 0 ? '+' : ''}${clockOffset}ms\n` +
           (roomState ? `${roomState.playing ? '▶' : '⏸'} ${fmt(roomState.positionAtEpoch)}  rev ${roomState.revision}\n` : '') +
           (st ? `me ${st.playing ? '▶' : '⏸'} ${fmt(st.currentTime)}` : 'me no <video>')
-        : `Hotstar Sync\nNo party yet`;
-      panel.appendChild(head);
+        : 'No party yet';
+      panel.appendChild(body);
 
       if (!roomCode) {
         panel.appendChild(button('▶ Start Watch Party', startParty));
       } else {
-        panel.appendChild(button('⟳ Sync to room', () => onRoomState()));   // click = user gesture → play() allowed
+        panel.appendChild(button('⟳ Sync to room', () => onRoomState()));
         panel.appendChild(button('🔗 Copy invite link', async () => {
           try { await navigator.clipboard.writeText(location.href); } catch {}
         }));
